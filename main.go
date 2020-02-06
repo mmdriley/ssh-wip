@@ -10,13 +10,6 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 )
 
-/*
-TODO
-- Configurable interface and port
-- Fixed host key (for now, use -o StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null)
-- Accept more than one connection
-*/
-
 // https://tools.ietf.org/html/rfc4254#section-7.2 shows "direct-tcpip" fields
 // https://tools.ietf.org/html/rfc4254#section-5.1 shows which are "extra"
 
@@ -53,9 +46,7 @@ func printTcpipForwardRequest(b []byte) {
 	fmt.Printf("%+v\n", s)
 }
 
-func main() {
-	// An SSH server is represented by a ServerConfig, which holds
-	// certificate details and handles authentication of ServerConns.
+func createServerConfig() *ssh.ServerConfig {
 	config := &ssh.ServerConfig{
 		// Remove to disable password auth.
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
@@ -74,6 +65,7 @@ func main() {
 		},
 	}
 
+	// TODO: persistent host key
 	_, hostPrivateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		log.Fatal(err)
@@ -86,27 +78,20 @@ func main() {
 
 	config.AddHostKey(hostKeySigner)
 
-	// Once a ServerConfig has been configured, connections can be
-	// accepted.
-	listener, err := net.Listen("tcp", "0.0.0.0:2222")
-	if err != nil {
-		log.Fatal("failed to listen for connection: ", err)
-	}
-	tcpConn, err := listener.Accept()
-	if err != nil {
-		log.Fatal("failed to accept incoming connection: ", err)
-	}
+	return config
+}
 
+func handleConnection(netconn net.Conn, config *ssh.ServerConfig) {
 	// sshConn -- metadata and control
 	// channels -- channel of "open channel" requests
 	//   https://tools.ietf.org/html/rfc4254#section-5.1
 	// requests -- channel of global requests
 	//   https://tools.ietf.org/html/rfc4254#section-4
-	sshConn, channels, requests, err := ssh.NewServerConn(tcpConn, config)
+	sshconn, channels, requests, err := ssh.NewServerConn(netconn, config)
 	if err != nil {
 		log.Fatal("failed to handshake: ", err)
 	}
-	var _ = sshConn
+	var _ = sshconn
 
 	// For now, rejeact all global requests
 	// This is where we will see e.g. tcpip-forward
@@ -161,5 +146,24 @@ func main() {
 				fmt.Println(line)
 			}
 		}()
+	}
+}
+
+func main() {
+	config := createServerConfig()
+
+	// TODO: configurable bind address and port
+	listener, err := net.Listen("tcp", "0.0.0.0:2222")
+	if err != nil {
+		log.Fatal("failed to listen for connection: ", err)
+	}
+
+	for {
+		connection, err := listener.Accept()
+		if err != nil {
+			log.Fatal("failed to accept incoming connection: ", err)
+		}
+
+		go handleConnection(connection, config)
 	}
 }
